@@ -1,4 +1,4 @@
-[README.md](https://github.com/user-attachments/files/31612020/README.md)
+[README.md](https://github.com/user-attachments/files/31612541/README.md)
 # 하이브리드 클라우드 Active-Active 인프라 보안 프로젝트 — 담당 파트
 
 > 4인 팀 프로젝트(2026.06.30 ~ 2026.07.31) 중 **본인이 직접 설계·구축한 영역**만 정리한 문서입니다.
@@ -35,7 +35,8 @@ Terraform으로 AWS 서울 리전(ap-northeast-2)에 VPC부터 TGW/VPN까지 순
 | CIDR 블록 | 10.12.0.0/16 |
 | AZ 수 | 2개 (ap-northeast-2a, ap-northeast-2c) |
 
-![VPC Terraform 코드](images/01-vpc-code.png)
+> 실제 코드: [`terraform/modules/vpc/main.tf`](terraform/modules/vpc/main.tf)
+
 ![VPC 콘솔 확인](images/02-vpc-console.png)
 
 ### Subnet 구성
@@ -56,7 +57,8 @@ Terraform으로 AWS 서울 리전(ap-northeast-2)에 VPC부터 TGW/VPN까지 순
 | private-subnet-rds-iac01-1 | 2a | 10.12.32.0/24 | RDS(MariaDB), ElastiCache, S3 Gateway Endpoint |
 | private-subnet-rds-iac01-2 | 2c | 10.12.33.0/24 | RDS(MariaDB), ElastiCache, S3 Gateway Endpoint |
 
-![Subnet Terraform 코드](images/03-public-subnet-code.png)
+> 실제 코드: [`terraform/modules/vpc/main.tf`](terraform/modules/vpc/main.tf)
+
 ![Subnet 콘솔 확인](images/04-subnet-console.png)
 
 ### Internet Gateway / NAT Gateway
@@ -66,7 +68,8 @@ Terraform으로 AWS 서울 리전(ap-northeast-2)에 VPC부터 TGW/VPN까지 순
 | IGW | seoul-igw-main-iac01 (Public Subnet 인터넷 인/아웃바운드 경로) |
 | NAT Gateway | nat-gw-iac01-1 / nat-gw-iac01-2 (AZ별 1개씩, 총 2개) |
 
-![IGW/NAT Terraform 코드](images/05-private-subnet-igw-nat-code.png)
+> 실제 코드: [`terraform/modules/vpc/main.tf`](terraform/modules/vpc/main.tf)
+
 ![IGW 콘솔 확인](images/06-igw-console.png)
 ![NAT Gateway 콘솔 확인 1](images/07-natgw-console-1.png)
 ![NAT Gateway 콘솔 확인 2](images/08-natgw-console-2.png)
@@ -106,6 +109,8 @@ Terraform으로 AWS 서울 리전(ap-northeast-2)에 VPC부터 TGW/VPN까지 순
 ---
 
 ## 2. VPN 연동 (AWS ↔ 온프레미스)
+
+> 실제 코드: [`terraform/modules/vpn/main.tf`](terraform/modules/vpn/main.tf) — Transit Gateway, Customer Gateway, VPN Connection 전 과정을 단독으로 작성한 모듈입니다.
 
 | 항목 | R1 | R2 | Security |
 |---|---|---|---|
@@ -254,7 +259,61 @@ AWS 로그는 소스가 많아 계획서상 소스별 개별 인덱스(`logs-waf
 
 ---
 
+## Terraform 코드 (담당 모듈)
+
+`terraform/modules/` 아래 실제 작업한 모듈 코드를 포함했습니다. 팀 공용 상태 파일(`terraform.tfstate`), provider 바이너리(`.terraform/`)는 보안상 제외했습니다.
+
+| 모듈 | 내용 |
+|---|---|
+| `modules/vpc` | VPC, Public/Private Subnet, IGW, NAT Gateway, Route Table |
+| `modules/sg` | Security Group 전체 (fw-icmp, fw-lb, fw-rds, fw-log_pipeline 등) |
+| `modules/cache` | ElastiCache(Valkey) — 세션/데이터 캐시 |
+| `modules/alb` | ALB, Target Group |
+| `modules/vpn` | Transit Gateway, Customer Gateway, Site-to-Site VPN — **처음부터 끝까지 단독 담당** |
+| `modules/log` | Kinesis-Logstash 로그 파이프라인, GuardDuty |
+
+## 담당 기여 내역 (커밋 기준)
+
+### 1. 네트워크 기반 모듈 초기 구축 (2026-07-07 ~ 07-08)
+VPC / Security Group / Cache(Redis) / LB / Target Group 모듈의 초기 골격을 설계했습니다.
+- `62cbf07` init — VPC, SG, Cache(Redis), LB, TG 모듈 최초 생성
+- `21a6b0f` — VPC/TG 변수 정리, `variables.yaml` 구조 확장
+
+### 2. AWS↔IDC VPN 모듈 — 지속 소유 (2026-07-09 ~ 07-23)
+하이브리드(AWS-온프레미스 IDC) 연결의 핵심인 VPN 모듈을 처음부터 끝까지 담당했습니다. 이후 07-30 R2 VPN BGP flapping 트러블슈팅도 이 모듈을 기반으로 대응했습니다.
+- `7a5df58` VPN 모듈 최초 생성 (`modules/vpn`)
+- `ea53951` Security Zone 추가 (VPN 대역 확장)
+- `b98dd19` VPN output(render_data) 비활성화 조정
+- `73d7bbb` AWS-IDC VPN 자동화 및 output 정리 (predestroy_cleanup, s3, outputs 연동)
+- `63c5a68` / `265a419` `automation.tf` 추가 후 제거 (자동화 방식 재검토)
+
+### 3. EKS/Redis 변수 정리 & 충돌 병합 (2026-07-14)
+- `9997d75` merge: conflicted — VPC/VPN 변수 충돌 해결
+- `bf96230` EKS/Redis 변수 정리
+
+### 4. 로깅 파이프라인 (Kinesis → Logstash) (2026-07-27 ~ 07-30)
+- `3697c11` Kinesis-Logstash 로그 모듈 추가
+- `2661a67` 로그 모듈 수정
+- `9925c4d` 중복 AWS 로그 리소스 제거
+
+### 5. GuardDuty 도입 (2026-07-30)
+- `c61ba08` GuardDuty 모듈 추가
+- `f239b12` 비용 고려해 기본 비활성화 옵션 처리 (lab 예산 정책 반영)
+
+### 요약
+
+| 영역 | 내용 |
+|---|---|
+| 네트워크 기반 | VPC, SG, Cache, LB, TG 모듈 초기 설계 |
+| VPN | AWS-IDC 하이브리드 VPN 모듈 신규 개발 및 지속 운영 (Security Zone, 자동화, output 정리) |
+| 컴퓨팅 연동 | EKS/Redis 변수 정리, merge conflict 해결 |
+| 로깅 | Kinesis→Logstash 로그 파이프라인 구현 및 중복 제거 |
+| 보안 모니터링 | GuardDuty 모듈 추가 (비용 정책 반영한 조건부 비활성화) |
+
+---
+
 ## 참고
 
 - 이 문서는 4인 팀 프로젝트의 일부입니다. EKS/컴퓨팅, DB/Failover, WAF, 백업 등 다른 팀원이 담당한 영역은 포함하지 않았습니다.
 - 팀 공용 저장소(Mega-study-IaC)는 비공개이며, 이 저장소는 본인이 담당한 부분만 개인 정리한 것입니다.
+- `terraform.tfstate`, `.terraform/` provider 바이너리는 민감 정보 및 용량 문제로 이 저장소에는 포함하지 않았습니다.
